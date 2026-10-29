@@ -4,9 +4,9 @@
 set -e
 
 RULE_DIR="/etc/cli"
-RULE_FILE="${RULE_DIR}/nat.rules"
+RULE_FILE="${RULE_DIR}/rules.conf"
 RULE_COMMENT="cli-port-hopping"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 mkdir -p ${RULE_DIR}
 
@@ -23,8 +23,8 @@ Commands:
                       example: cli add 443 55000 60000
   del <行号>          删除指定行号的单条规则
   clear               删除 cli 管理的全部跳转规则
-  reload              从磁盘文件重新加载所有保存的 NAT 规则
-  save                将当前内核中的 NAT 规则持久化保存到磁盘
+  reload              从磁盘文件重新加载所有保存的规则（不影响其他nat规则）
+  save                将当前 cli 管理的规则持久化保存到磁盘
   status              查看规则文件与当前生效状态
   version             查看版本号
   help                查看帮助文档
@@ -63,7 +63,7 @@ check_ufw(){
     fi
 }
 
-# ========== 功能函数 ==========
+# ========== 核心功能函数 ==========
 cmd_list(){
     check_root
     echo "==== Cli Port Hopping NAT Rules ===="
@@ -150,15 +150,39 @@ cmd_reload(){
         echo "❌ 规则文件不存在: ${RULE_FILE}，请先添加规则并执行 cli save"
         return 1
     fi
-    echo "从 ${RULE_FILE} 重载 NAT 规则"
-    iptables-restore < ${RULE_FILE}
+
+    echo "从 ${RULE_FILE} 重载 cli 规则（不影响其他nat规则）"
+    # 先清空所有cli旧规则，再逐条加载保存的规则
+    while iptables -t nat -L PREROUTING -n --line-numbers | grep -q "${RULE_COMMENT}"; do
+        local line
+        line=$(iptables -t nat -L PREROUTING -n --line-numbers | grep "${RULE_COMMENT}" | awk 'NR==1{print $1}')
+        iptables -t nat -D PREROUTING "$line"
+    done
+
+    while IFS=' ' read -r target start end; do
+        [ -z "$target" ] && continue
+        iptables -t nat -A PREROUTING -p udp \
+            --dport ${start}:${end} \
+            -j REDIRECT --to-ports ${target} \
+            -m comment --comment "${RULE_COMMENT}"
+    done < "${RULE_FILE}"
+
     echo "✅ 重载完成"
 }
 
 cmd_save(){
     check_root
-    iptables-save -t nat > ${RULE_FILE}
-    echo "✅ NAT 规则已保存到 ${RULE_FILE}"
+    # 只保存cli自己的规则，格式：主端口 起始端口 结束端口
+    iptables -t nat -L PREROUTING -n | grep "${RULE_COMMENT}" | awk '{
+        # 提取端口段和目标端口
+        dport = $7;
+        to = $10;
+        gsub("dpt:", "", dport);
+        gsub("to:", "", to);
+        split(dport, arr, ":");
+        print to, arr[1], arr[2];
+    }' > "${RULE_FILE}"
+    echo "✅ 规则已保存到 ${RULE_FILE}"
 }
 
 cmd_status(){
