@@ -1,6 +1,6 @@
 #!/bin/bash
 # cli - Port Hopping Iptables Manager
-# Repo: https://github.com/你的用户名/cli
+# Repo: https://github.com/hfzjob/cli
 set -e
 
 RULE_DIR="/etc/cli"
