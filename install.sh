@@ -4,7 +4,7 @@
 set -e
 
 # ========== 请替换为你的 GitHub 用户名 ==========
-GITHUB_USER="你的用户名"
+GITHUB_USER="hfzjob"
 BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/cli/${BRANCH}"
 # ================================================
