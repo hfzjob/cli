@@ -1,0 +1,283 @@
+#!/bin/bash
+# cli - Port Hopping Iptables Manager
+# Repo: https://github.com/你的用户名/cli
+set -e
+
+RULE_DIR="/etc/cli"
+RULE_FILE="${RULE_DIR}/nat.rules"
+RULE_COMMENT="cli-port-hopping"
+VERSION="1.1.0"
+
+mkdir -p ${RULE_DIR}
+
+show_help(){
+cat <<EOF
+cli - Hysteria2 Port Hopping Iptables Manager v${VERSION}
+用法1（交互式）：直接输入 cli 回车，按菜单选择
+用法2（命令式）：cli [command] [参数]
+
+Commands:
+  list                列出所有由 cli 管理的端口跳转规则（带行号）
+  add <主端口> <起始端口> <结束端口>
+                      添加一条 UDP 端口跳转规则
+                      example: cli add 443 55000 60000
+  del <行号>          删除指定行号的单条规则
+  clear               删除 cli 管理的全部跳转规则
+  reload              从磁盘文件重新加载所有保存的 NAT 规则
+  save                将当前内核中的 NAT 规则持久化保存到磁盘
+  status              查看规则文件与当前生效状态
+  version             查看版本号
+  help                查看帮助文档
+
+说明：
+- 仅管理带 cli 标记的 PREROUTING NAT UDP 规则，不影响系统其他 iptables 规则
+- 自动检测 UFW 并放行端口段；无 UFW 环境需手动放行端口
+EOF
+}
+
+check_root(){
+    if [ "$(id -u)" -ne 0 ];then
+        echo "❌ 需要 root 权限，请使用 sudo cli"
+        exit 1
+    fi
+}
+
+validate_port(){
+    local port=$1
+    if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo "❌ 端口必须为数字: $port"
+        return 1
+    fi
+    if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo "❌ 端口范围必须在 1-65535 之间: $port"
+        return 1
+    fi
+    return 0
+}
+
+check_ufw(){
+    if command -v ufw &> /dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ========== 功能函数 ==========
+cmd_list(){
+    check_root
+    echo "==== Cli Port Hopping NAT Rules ===="
+    iptables -t nat -L PREROUTING -n --line-numbers | grep "${RULE_COMMENT}" || echo "暂无规则"
+}
+
+cmd_add(){
+    check_root
+    local TARGET_PORT="$1"
+    local PORT_START="$2"
+    local PORT_END="$3"
+
+    if [ -z "${TARGET_PORT}" ] || [ -z "${PORT_START}" ] || [ -z "${PORT_END}" ];then
+        echo "❌ 参数缺失！用法：cli add 主端口 起始端口 结束端口"
+        return 1
+    fi
+
+    validate_port "${TARGET_PORT}" || return 1
+    validate_port "${PORT_START}" || return 1
+    validate_port "${PORT_END}" || return 1
+
+    if [ "${PORT_START}" -gt "${PORT_END}" ]; then
+        echo "❌ 起始端口不能大于结束端口"
+        return 1
+    fi
+
+    echo "添加规则：UDP ${PORT_START}:${PORT_END} → ${TARGET_PORT}"
+    iptables -t nat -A PREROUTING -p udp \
+        --dport ${PORT_START}:${PORT_END} \
+        -j REDIRECT --to-ports ${TARGET_PORT} \
+        -m comment --comment "${RULE_COMMENT}"
+
+    if check_ufw; then
+        ufw allow ${PORT_START}:${PORT_END}/udp
+        echo "UFW 已放行 ${PORT_START}:${PORT_END}/udp"
+    else
+        echo "⚠️  未检测到 UFW，请手动在防火墙放行 ${PORT_START}:${PORT_END}/udp"
+    fi
+
+    cmd_save
+    echo "✅ 添加完成，规则已持久化保存"
+}
+
+cmd_del(){
+    check_root
+    local LINE_NUM="$1"
+    if [ -z "${LINE_NUM}" ];then
+        echo "❌ 需要行号，先用 cli list 查看行号"
+        return 1
+    fi
+    if ! [[ "$LINE_NUM" =~ ^[0-9]+$ ]]; then
+        echo "❌ 行号必须为数字"
+        return 1
+    fi
+
+    echo "删除 NAT PREROUTING 第 ${LINE_NUM} 条规则"
+    iptables -t nat -D PREROUTING ${LINE_NUM}
+    cmd_save
+    echo "✅ 删除完成并保存"
+}
+
+cmd_clear(){
+    check_root
+    echo "⚠️  将删除所有由 cli 管理的 UDP 跳转规则，确认？[y/N]"
+    read -r ans
+    if [ "${ans}" != "y" ] && [ "${ans}" != "Y" ];then
+        echo "已取消"
+        return 0
+    fi
+
+    while iptables -t nat -L PREROUTING -n --line-numbers | grep -q "${RULE_COMMENT}"; do
+        local line
+        line=$(iptables -t nat -L PREROUTING -n --line-numbers | grep "${RULE_COMMENT}" | awk 'NR==1{print $1}')
+        iptables -t nat -D PREROUTING "$line"
+    done
+
+    echo "✅ 全部跳转规则已清空"
+    cmd_save
+}
+
+cmd_reload(){
+    check_root
+    if [ ! -f "${RULE_FILE}" ]; then
+        echo "❌ 规则文件不存在: ${RULE_FILE}，请先添加规则并执行 cli save"
+        return 1
+    fi
+    echo "从 ${RULE_FILE} 重载 NAT 规则"
+    iptables-restore < ${RULE_FILE}
+    echo "✅ 重载完成"
+}
+
+cmd_save(){
+    check_root
+    iptables-save -t nat > ${RULE_FILE}
+    echo "✅ NAT 规则已保存到 ${RULE_FILE}"
+}
+
+cmd_status(){
+    check_root
+    echo "==== Cli 运行状态 ===="
+    echo "版本: ${VERSION}"
+    echo "规则存储文件: ${RULE_FILE}"
+    if [ -f "${RULE_FILE}" ]; then
+        ls -lh ${RULE_FILE}
+    else
+        echo "规则文件: 不存在（尚未保存）"
+    fi
+    echo
+    echo "当前生效规则:"
+    cmd_list
+}
+
+# ========== 交互式菜单 ==========
+interactive_menu(){
+    check_root
+    while true; do
+        clear
+        echo "=================================="
+        echo "  Cli 端口跳转管理工具 v${VERSION}"
+        echo "=================================="
+        echo "  1. 查看规则列表"
+        echo "  2. 添加端口跳转规则"
+        echo "  3. 删除单条规则"
+        echo "  4. 清空全部规则"
+        echo "  5. 保存规则到磁盘"
+        echo "  6. 从磁盘重载规则"
+        echo "  7. 查看运行状态"
+        echo "  0. 退出"
+        echo "=================================="
+        read -rp "请输入选项序号: " choice
+
+        case "$choice" in
+            1)
+                echo
+                cmd_list
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            2)
+                echo
+                read -rp "请输入主端口 (如 443): " target
+                read -rp "请输入起始端口 (如 55000): " start
+                read -rp "请输入结束端口 (如 60000): " end
+                echo
+                cmd_add "$target" "$start" "$end"
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            3)
+                echo
+                cmd_list
+                echo
+                read -rp "请输入要删除的行号: " line
+                echo
+                cmd_del "$line"
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            4)
+                echo
+                cmd_clear
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            5)
+                echo
+                cmd_save
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            6)
+                echo
+                cmd_reload
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            7)
+                echo
+                cmd_status
+                echo
+                read -rp "按回车返回菜单..." -n1 -s
+                ;;
+            0)
+                echo "退出"
+                exit 0
+                ;;
+            *)
+                echo
+                echo "❌ 无效选项，请重新输入"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# ========== 主入口 ==========
+if [ $# -eq 0 ]; then
+    interactive_menu
+    exit 0
+fi
+
+case "$1" in
+    list)   cmd_list ;;
+    add)    cmd_add "$2" "$3" "$4" ;;
+    del)    cmd_del "$2" ;;
+    clear)  cmd_clear ;;
+    reload) cmd_reload ;;
+    save)   cmd_save ;;
+    status) cmd_status ;;
+    version) echo "cli version ${VERSION}" ;;
+    help)   show_help ;;
+    *)
+        echo "未知命令: $1"
+        echo "使用 cli help 查看帮助，或直接输入 cli 进入交互式菜单"
+        exit 1
+        ;;
+esac
