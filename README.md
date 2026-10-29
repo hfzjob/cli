@@ -19,7 +19,8 @@ Ubuntu 20.04+ / Debian 11+
 ## 🚀 一键安装
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/你的用户名/cli/main/install.sh)
-
+```
+## 规则
 # 查看帮助
 sudo cli help
 
