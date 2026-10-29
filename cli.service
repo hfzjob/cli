@@ -1,0 +1,11 @@
+[Unit]
+Description=Cli Port Hopping Iptables Rule Loader
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/iptables-restore /etc/cli/nat.rules
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
