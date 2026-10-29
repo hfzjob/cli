@@ -44,5 +44,6 @@ sudo cli reload
 # 查看整体状态
 sudo cli status
 
+#🗑️ 卸载
 sudo cli clear
 sudo bash uninstall.sh
