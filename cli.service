@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/iptables-restore /etc/cli/nat.rules
+ExecStart=/usr/local/bin/cli reload
 RemainAfterExit=yes
 
 [Install]
