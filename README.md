@@ -20,3 +20,29 @@ Ubuntu 20.04+ / Debian 11+
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/你的用户名/cli/main/install.sh)
 
+# 查看帮助
+sudo cli help
+
+# 查看所有规则（带行号）
+sudo cli list
+
+# 添加一条端口跳转：UDP 55000-60000 全部转发到 443
+sudo cli add 443 55000 60000
+
+# 删除单条规则（行号从 cli list 获取）
+sudo cli del 1
+
+# 清空所有 cli 管理的规则
+sudo cli clear
+
+# 保存当前规则到磁盘（开机自动加载）
+sudo cli save
+
+# 从磁盘重新加载规则
+sudo cli reload
+
+# 查看整体状态
+sudo cli status
+
+sudo cli clear
+sudo bash uninstall.sh
